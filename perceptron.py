@@ -1,16 +1,34 @@
 '''Basic perceptron library.
 
-A Perceptron is a basic machine learning algorithm with a long and colored
-past. Perceptrons are supervised, discriminative models requiring a set of
-labeled data.
+Perceptrons are supervised, discriminative models for classifying data points
+(also called "events") into one of a number of discrete categories (also called
+"outcomes"). The basic perceptron is simply a vector W in event space that is
+normal to a linear separating surface going through the origin. Data points that
+fall on one side of the hyperplane are in outcome (+), and data points on the
+other side are in outcome (-). To determine the side of the hyperplane that an
+unlabeled event X falls on, we compute the dot product of X and W and return the
+sign of the resulting scalar. Learning takes place in the Perceptron whenever it
+makes an incorrect classification from labeled data : X is simply added to W to
+minimally correct the output of the Perceptron for this data point. This might
+invalidate classifications for other events in the data set, but it is simple.
+
+This particular library generalizes the Perceptron to K > 2 outcomes by
+maintaining a separate hyperplane for each of the K possible outcomes. Each
+hyperplane can be thought of as separating events in one outcome from events in
+all other outcomes. At classification time, we compute the dot product of X with
+each of the Ws. The outcome with the greatest resulting scalar value is returned
+as the output.
+
+This library also incorporates the "kernel trick" to generalize the notion of
+the dot product to (almost) arbitrary high-dimensional spaces. Instead of
+computing the dot product between X and W, we use a Kernel function that accepts
+X and W as inputs and returns a scalar value indicating their similarity in some
+(often much higher-dimensional) mapped comparison space.
+
+Run a simple test on the library by calling this script from the command line.
 '''
 
 import numpy
-import collections
-
-
-def norm(x):
-    return numpy.dot(x, x)
 
 
 class Kernel(object):
@@ -20,24 +38,9 @@ class Kernel(object):
     each of the input vectors.
     '''
 
-    def __init__(self, **kwargs):
-        self.__kwargs = kwargs
-
-    def __repr__(self):
-        kwargs = ', '.join('%s=%r' % i for i in self.__kwargs.iteritems())
-        return '%s(%s)' % (self.__class__.__name__, kwargs)
-
     def __call__(self, a, b):
         '''Obtain a scalar from two vectors.'''
         raise NotImplemented
-
-    def copy(self):
-        '''Return a copy of this kernel object.'''
-        return self.__class__(**self.__kwargs)
-
-    def reset(self):
-        '''Reset this Kernel object. Not needed for most kernels.'''
-        pass
 
 
 class DotProductKernel(Kernel):
@@ -50,22 +53,18 @@ class DotProductKernel(Kernel):
 class RadialBasisKernel(Kernel):
     '''This Kernel returns the gaussian distance between the input vectors.'''
 
-    def __init__(self, gamma, decay=1.0):
-        super(RadialBasisKernel, self).__init__(gamma=gamma, decay=decay)
-        self._gamma_0 = self._gamma = gamma
-        self._decay = decay
+    def __init__(self, gamma):
+        self._gamma = gamma
 
     def __call__(self, a, b):
-        self._gamma *= self._decay
         delta = b - a
-        return numpy.exp(self._gamma * norm(b - a))
+        return numpy.exp(-self._gamma * (delta * delta).sum())
 
 
 class PolynomialKernel(Kernel):
     '''This Kernel returns the dot product raised to some power.'''
 
     def __init__(self, degree, alpha=1.0):
-        super(PolynomialKernel, self).__init__(degree=degree, alpha=alpha)
         self._degree = degree
         self._alpha = alpha
 
@@ -73,136 +72,131 @@ class PolynomialKernel(Kernel):
         return (numpy.dot(a, b) + self._alpha) ** self._degree
 
 
+def _max_outcome(weights, kernel, event):
+    '''Return the maximum scoring outcome for a set of weights.'''
+    max_outcome = -1
+    max_score = -1e100
+    for outcome in xrange(weights.shape[0]):
+        score = kernel(weights[outcome, :], event)
+        if score > max_score:
+            max_outcome = outcome
+            max_score = score
+    return max_outcome
+
+
 class Perceptron(object):
     '''A perceptron is a simple discriminative machine learning algorithm.'''
 
-    def __init__(self, dimension=None, weights=None, kernel=None):
-        if weights is None:
-            self._weights = numpy.random.normal(size=(dimension, ))
-        else:
-            self._weights = numpy.array(weights)
+    def __init__(self, event_space, outcome_space, kernel=None):
+        '''Initialize this Perceptron.
 
-        if kernel is None:
-            self._kernel = DotProductKernel()
-        else:
-            self._kernel = kernel
+        event_space: An integer indicating the dimensionality of the event space.
+        outcome_space: An integer indicating the number of classes in the data.
+        kernel: A Kernel object that we can use to compute the distance between
+          a data point and our weight vector.
+        '''
+        assert outcome_space >= 2
+        assert event_space >= 1
+        self._weights = numpy.zeros((outcome_space, event_space), dtype='d')
+        self._kernel = kernel or DotProductKernel()
 
-    def __repr__(self):
-        return 'Perceptron(weights=%r, kernel=%r)' % (
-            tuple(self._weights), self._kernel)
-
-    def weights(self):
+    def _working_weights(self):
+        '''Get the working weights for this Perceptron.'''
         return self._weights
 
-    def kernel(self):
-        return self._kernel
+    def _update(self, outcome, target):
+        '''Update the weights for a single outcome toward a particular target.'''
+        W = self._weights[outcome, :]
+        W += target
+        W /= numpy.sqrt((W * W).sum())
 
-    def classify(self, x):
-        return self._kernel(self._weights, x)
+    def classify(self, event):
+        '''Classify an event into one of our possible outcomes.
 
-    def learn(self, x, label):
-        if label ^ (self.classify(x) > 0):
-            self._weights += x
-            self._weights /= norm(self._weights)
+        event: A numpy vector of the dimensionality of our input space.
+
+        Returns the most likely outcome, an integer in [0, outcome_space).
+        '''
+        return _max_outcome(self._working_weights(), self._kernel, event)
+
+    def learn(self, event, outcome):
+        '''Adjust the hyperplane based on a classification attempt.
+
+        event: A numpy vector of the dimensionality of our input space.
+        outcome: An integer in [0, outcome_space) indicating the correct outcome
+          for this event.
+        '''
+        prediction = self.classify(event)
+        if prediction is not outcome:
+            self._update(prediction, -event)
+            self._update(outcome, event)
 
 
-class VotedPerceptron(object):
-    '''A voted perceptron is a weighted sum of individual perceptrons.'''
+class AveragedPerceptron(Perceptron):
+    '''A weighted sum of individual Perceptrons.'''
 
-    def __init__(self,
-                 dimension=None,
-                 weights=None,
-                 kernel=None,
-                 max_voters=0):
-        self._voters = []
-        self._max_voters = max_voters
-        self._voter = Perceptron(dimension=dimension,
-                                 weights=weights,
-                                 kernel=kernel)
-        self._weight = 1
+    def __init__(self, event_space, outcome_space, kernel=None):
+        super(AveragedPerceptron, self).__init__(event_space, outcome_space, kernel)
+        self._iterations = 0
+        self._strength = 0
+        self._history = self._weights[:, :]
 
-    def voters(self):
-        return self._voters
+    def _working_weights(self):
+        return (self._history + self._weights * self._strength) / self._iterations
 
-    def classify(self, x):
-        '''Classify an unlabeled data point.'''
-        aggregate = 0.0
-        for weight, voter in self._voters:
-            aggregate += weight * voter.classify(x)
-        return aggregate + self._weight * self._voter.classify(x)
-
-    def learn(self, x, label):
-        '''Learn from a labeled data point.'''
-        if label ^ (self._voter.classify(x) > 0):
-            # the current perceptron got this point wrong. we add this
-            # perceptron to our list of voters, along with the current weight.
-            self._voters.append((self._weight, self._voter))
-
-            # we might have to discard a voter. if so, discard the one with the
-            # lowest weight.
-            if len(self._voters) > self._max_voters > 0:
-                self._voters.sort(reverse=True)
-                self._voters.pop()
-
-            # create a new perceptron with the old one's weights and kernel
-            # function.
-            weights = self._voter.weights() + x
-            weights /= norm(weights)
-
-            kernel = self._voter.kernel().copy()
-
-            self._voter = Perceptron(weights=weights, kernel=kernel)
-            self._weight = 0
-
-        # increase the weight for this voter by 1. if we didn't replace the
-        # current voter, this effectively increases its voting power.
-        self._weight += 1
+    def learn(self, event, outcome):
+        self._iterations += 1
+        self._strength += 1
+        prediction = _max_outcome(self._weights, self._kernel, event)
+        if outcome is not prediction:
+            self._history += self._weights * self._strength
+            self._strength = 0
+            self._update(prediction, -event)
+            self._update(outcome, event)
 
 
 if __name__ == '__main__':
     import random
 
-    M = 1001
-    N = 101
-    centers = [(1, 0, 0), (-1, 0, 0)]
+    centers = (( 1,  1,  1,  1,  1,  1,  1,  1),
+               (-1, -1, -1, -1, -1, -1, -1, -1),
+               (-1, -1, -1, -1,  1,  1,  1,  1),
+               ( 1, -1,  1, -1,  1, -1,  1, -1))
 
-    def sample():
-        klass = random.randint(0, 1)
-        point = numpy.random.normal(centers[klass], 1)
-        return point, bool(klass)
+    def sample(variance):
+        outcome = random.randint(0, len(centers) - 1)
+        event = numpy.random.normal(centers[outcome], variance)
+        return event, outcome
 
-    kwargs = dict(dimension=len(centers[0]))
-    p = Perceptron(**kwargs)
+    kwargs = dict(event_space=len(centers[0]),
+                  outcome_space=len(centers))
 
-    kwargs['max_voters'] = 5
-    v = VotedPerceptron(**kwargs)
+    learners = []
+    for Klass in (Perceptron, AveragedPerceptron):
+        learners.append(Klass(**kwargs))
+        for d in (1, 2, 5):
+            learners.append(Klass(kernel=PolynomialKernel(d), **kwargs))
+        learners.append(Klass(kernel=RadialBasisKernel(0.5), **kwargs))
 
-    kwargs['kernel'] = PolynomialKernel(2)
-    k = VotedPerceptron(**kwargs)
+    print 'Var\tP\tP:p1\tP:p2\tP:p5\tP:r\tA\tA:p1\tA:p2\tA:p5\tA:r'
 
-    for _ in xrange(M):
-        point, label = sample()
-        p.learn(point, label)
-        v.learn(point, label)
-        k.learn(point, label)
+    for variance in (0.1, 0.2, 0.5, 1, 2, 5, 10):
+        # train all classifiers on a set of sample data.
+        for _ in xrange(1000):
+            event, outcome = sample(variance)
+            for p in learners:
+                p.learn(event, outcome)
 
-    p_correct = 0
-    v_correct = 0
-    k_correct = 0
-    for _ in xrange(N):
-        point, label = sample()
-        if not ((p.classify(point) > 0) ^ label):
-            p_correct += 1
-        if not ((v.classify(point) > 0) ^ label):
-            v_correct += 1
-        if not ((k.classify(point) > 0) ^ label):
-            k_correct += 1
+        # test on a different set of data.
+        correct = [0] * len(learners)
+        for _ in xrange(100):
+            event, outcome = sample(variance)
+            for i, p in enumerate(learners):
+                if p.classify(event) is outcome:
+                    correct[i] += 1
 
-    print '%d training / %d test samples' % (M, N)
-    print 'perceptron - %.1f %% correct' % (100.0 * p_correct / N)
-    print '  0:', repr(p)
-    print 'voting - %.1f %% correct' % (100.0 * v_correct / N)
-    for w, p in v.voters(): print '  %d: %r' % (w, p)
-    print 'kernel - %.1f %% correct' % (100.0 * k_correct / N)
-    for w, p in k.voters(): print '  %d: %r' % (w, p)
-
+        # display some results.
+        print variance,
+        for i, p in enumerate(learners):
+            print '\t', correct[i],
+        print

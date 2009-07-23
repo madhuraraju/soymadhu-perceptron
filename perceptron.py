@@ -87,17 +87,17 @@ def _max_outcome(weights, kernel, event):
 class Perceptron(object):
     '''A perceptron is a simple discriminative machine learning algorithm.'''
 
-    def __init__(self, event_space, outcome_space, kernel=None):
+    def __init__(self, event_size, outcome_size, kernel=None):
         '''Initialize this Perceptron.
 
-        event_space: An integer indicating the dimensionality of the event space.
-        outcome_space: An integer indicating the number of classes in the data.
+        event_size: An integer indicating the dimensionality of the event space.
+        outcome_size: An integer indicating the number of classes in the data.
         kernel: A Kernel object that we can use to compute the distance between
           a data point and our weight vector.
         '''
-        assert outcome_space >= 2
-        assert event_space >= 1
-        self._weights = numpy.zeros((outcome_space, event_space), dtype='d')
+        assert outcome_size >= 2
+        assert event_size >= 1
+        self._weights = numpy.zeros((outcome_size, event_size), dtype='d')
         self._kernel = kernel or DotProductKernel()
 
     def _working_weights(self):
@@ -115,7 +115,7 @@ class Perceptron(object):
 
         event: A numpy vector of the dimensionality of our input space.
 
-        Returns the most likely outcome, an integer in [0, outcome_space).
+        Returns the most likely outcome, an integer in [0, outcome_size).
         '''
         return _max_outcome(self._working_weights(), self._kernel, event)
 
@@ -123,7 +123,7 @@ class Perceptron(object):
         '''Adjust the hyperplane based on a classification attempt.
 
         event: A numpy vector of the dimensionality of our input space.
-        outcome: An integer in [0, outcome_space) indicating the correct outcome
+        outcome: An integer in [0, outcome_size) indicating the correct outcome
           for this event.
         '''
         prediction = self.classify(event)
@@ -135,8 +135,8 @@ class Perceptron(object):
 class AveragedPerceptron(Perceptron):
     '''A weighted sum of individual Perceptrons.'''
 
-    def __init__(self, event_space, outcome_space, kernel=None):
-        super(AveragedPerceptron, self).__init__(event_space, outcome_space, kernel)
+    def __init__(self, event_size, outcome_size, kernel=None):
+        super(AveragedPerceptron, self).__init__(event_size, outcome_size, kernel)
         self._iterations = 0
         self._strength = 0
         self._history = self._weights[:, :]
@@ -168,8 +168,7 @@ if __name__ == '__main__':
         event = numpy.random.normal(centers[outcome], variance)
         return event, outcome
 
-    kwargs = dict(event_space=len(centers[0]),
-                  outcome_space=len(centers))
+    kwargs = dict(event_size=len(centers[0]), outcome_size=len(centers))
 
     learners = []
     for Klass in (Perceptron, AveragedPerceptron):

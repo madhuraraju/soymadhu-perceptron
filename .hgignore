@@ -1,0 +1,4 @@
+syntax: regexp
+~$
+\#[^/]+\#$
+\.py[oc]$

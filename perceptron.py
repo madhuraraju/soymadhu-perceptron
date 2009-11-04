@@ -49,6 +49,7 @@ Run a test on the library by calling this script from the command line.
 '''
 
 import numpy
+from numpy import random as rng
 
 
 class Kernel(object):
@@ -120,10 +121,6 @@ class Perceptron(object):
         self._weights = numpy.zeros((outcome_size, event_size), dtype='d')
         self._kernel = kernel or DotProductKernel()
 
-    def _working_weights(self):
-        '''Get the working weights for this Perceptron.'''
-        return self._weights
-
     def _update(self, outcome, target):
         '''Update the weights for a single outcome toward a particular target.'''
         W = self._weights[outcome, :]
@@ -137,7 +134,7 @@ class Perceptron(object):
 
         Returns the most likely outcome, an integer in [0, outcome_size).
         '''
-        return _max_outcome(self._working_weights(), self._kernel, event)
+        return _max_outcome(self._weights, self._kernel, event)
 
     def learn(self, event, outcome):
         '''Adjust the hyperplane based on a classification attempt.
@@ -180,11 +177,7 @@ class AveragedPerceptron(Perceptron):
         parent.__init__(event_size, outcome_size, kernel)
         self._iterations = 0
         self._survived = 0
-        self._history = self._weights[:, :]
-
-    def _working_weights(self):
-        total = self._history + self._weights * self._survived
-        return total / self._iterations
+        self._history = self._weights.copy()
 
     def learn(self, event, outcome):
         self._iterations += 1
@@ -196,21 +189,23 @@ class AveragedPerceptron(Perceptron):
             self._update(prediction, -event)
             self._update(outcome, event)
 
+    def classify(self, event):
+        weights = self._history + self._weights * self._survived
+        return _max_outcome(weights / self._iterations, self._kernel, event)
+
 
 if __name__ == '__main__':
-    import random
-
     centers = (
-        (1,  1,  1,  1,  1,  1,  1,  1,  1),
-        (1, -1,  1, -1,  1, -1,  1, -1,  1),
-        (1, -1, -1,  1,  1, -1, -1,  1,  1),
-        (1, -1, -1, -1, -1,  1,  1,  1,  1),
-        (1, -1, -1, -1, -1, -1, -1, -1, -1),
+        (0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1),
+        (0, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1),
+        (0, -1, -1,  1,  1, -1, -1,  1,  1, -1, -1,  1,  1, -1, -1,  1,  1),
+        (0, -1, -1, -1, -1,  1,  1,  1,  1, -1, -1, -1, -1,  1,  1,  1,  1),
+        (0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
         )
 
     def sample(variance):
-        outcome = random.randint(0, len(centers) - 1)
-        event = numpy.random.normal(centers[outcome], variance)
+        outcome = int(rng.random() * len(centers))
+        event = rng.normal(centers[outcome], variance)
         event[0] = 1  # always set the bias to 1.
         return event / numpy.sqrt((event * event).sum()), outcome
 
@@ -223,7 +218,8 @@ if __name__ == '__main__':
             learners.append(Klass(kernel=PolynomialKernel(d), **kwargs))
         learners.append(Klass(kernel=RadialBasisKernel(0.5), **kwargs))
 
-    print '%% correct on test set after learning %d gaussians' % len(centers)
+    print 'training data: 500 points drawn randomly from %d gaussians' % len(centers)
+    print '% correct on 100 points drawn from the same gaussians'
     print 'Var\t| P\tP:p1\tP:p2\tP:p5\tP:r\t| A\tA:p1\tA:p2\tA:p5\tA:r'
 
     for variance in (0.1, 0.2, 0.5, 1, 2, 5, 10):
@@ -243,7 +239,7 @@ if __name__ == '__main__':
                     correct[i] += 1
 
         # display some results.
-        print variance, '\t|',
+        print '%4.1f' % variance, '\t|',
         for i, p in enumerate(learners):
             print '%3d' % correct[i], '\t',
             if i == 4:

@@ -18,11 +18,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-'''Command line tests for the basic Perceptron library.'''
+'''Command line tests for the basic Perceptron library.
 
-from numpy import random as rng
+The data for the tests comes from :
+http://www.ncrg.aston.ac.uk/GTM/3PhaseData.html
+'''
 
-from perceptron import *
+import numpy
+
+import perceptron
 
 
 EVENT_SIZE = 12
@@ -35,20 +39,20 @@ BEAM_WIDTHS = (1, 10, 100, 1000)
 def learners():
     kwargs = dict(event_size=EVENT_SIZE, outcome_size=OUTCOME_SIZE)
     for klass in ('Perceptron', 'AveragedPerceptron'):
-        factory = eval(klass)
+        factory = getattr(perceptron, klass)
         yield (klass, '  vanilla   ', factory(**kwargs))
         for d in DEGREES:
             yield (klass,
                    'polynomial-%d' % d,
-                   factory(kernel=polynomial_kernel(d), **kwargs))
+                   factory(kernel=perceptron.polynomial_kernel(d), **kwargs))
         for g in GAMMAS:
             yield (klass,
                    'radial-%.3f' % g,
-                   factory(kernel=radial_basis_kernel(g), **kwargs))
+                   factory(kernel=perceptron.radial_basis_kernel(g), **kwargs))
     for b in BEAM_WIDTHS:
         yield ('SparseAveragedPerceptron',
                'beam-%d' % b,
-               SparseAveragedPerceptron(beam_width=b, **kwargs))
+               perceptron.SparseAveragedPerceptron(beam_width=b, **kwargs))
 
 
 def _parse(filename):
@@ -57,7 +61,9 @@ def _parse(filename):
         for line in handle:
             try:
                 fields = map(float, line.strip().split())
+
                 assert len(fields) == 1 + EVENT_SIZE
+
                 outcome = int(fields[0]) - 1
                 assert 0 <= outcome < OUTCOME_SIZE
 
@@ -84,18 +90,18 @@ def train(learner):
     '''Train a learner on a set of sample data.'''
     for outcome, event in _parse('data/flow-train.txt'):
         features = event
-        if isinstance(learner, SparseAveragedPerceptron):
+        if isinstance(learner, perceptron.SparseAveragedPerceptron):
             features = set(_features(event))
         learner.learn(features, outcome)
 
 
 def test(learner):
     '''Test a learner on a randomly generated set of data.'''
-    correct = numpy.zeros((OUTCOME_SIZE, ), 'i')
+    correct = [0] * OUTCOME_SIZE
     j = 0
     for j, (outcome, event) in enumerate(_parse('data/flow-test.txt')):
         features = event
-        if isinstance(learner, SparseAveragedPerceptron):
+        if isinstance(learner, perceptron.SparseAveragedPerceptron):
             features = set(_features(event))
         pred, _ = learner.classify(features)
         if pred == outcome:
@@ -107,5 +113,5 @@ if __name__ == '__main__':
     for klass, flavor, learner in learners():
         train(learner)
         correct, count = test(learner)
-        print '%s - %s - accuracy %.2f, counts %s' % (
-            klass, flavor, 100.0 * correct.sum() / count, correct)
+        print '%s - %s - accuracy %.2f, correct per class %s' % (
+            klass, flavor, 100.0 * sum(correct) / count, correct)

@@ -119,14 +119,13 @@ class Perceptron(object):
         event: An event vector.
         kernel: A kernel function to combine weights with the event.
         '''
-        max_outcome = 0
-        max_score = -1e100
-        for o, w in enumerate(weights):
-            score = kernel(w, event)
-            if score > max_score:
-                max_outcome = o
-                max_score = score
-        return max_outcome, max_score
+        scores = numpy.array([kernel(w, event) for w in weights])
+        index = scores.argmax()
+        # Return the score as a probability computed locally among our possible
+        # outcomes. Subtracting the maximum raw score before exponentiating
+        # stabilizes the result numerically, while also encouraging low-scoring
+        # values to err by squashing towards 0.
+        return index, 1.0 / numpy.exp(scores - scores[index]).sum()
 
 
 class AveragedPerceptron(Perceptron):
@@ -155,42 +154,34 @@ class AveragedPerceptron(Perceptron):
     def __init__(self, event_size, outcome_size, kernel=None):
         super(AveragedPerceptron, self).__init__(
             event_size, outcome_size, kernel)
-        self._iterations = 0
-        self._survived = 0
+        self._iterations = numpy.zeros((outcome_size, ), 'i')
+        self._survived = numpy.zeros((outcome_size, ), 'i')
         self._history = numpy.zeros(self._weights.shape, 'd')
+        self._acc = numpy.zeros(self._weights.shape, 'd')
 
     def classify(self, event):
-        '''Classify an event into one of our possible outcomes.
-
-        event: A numpy vector of the dimensionality of our input space.
-
-        Returns a pair of (outcome, score) for the most likely outcome.
-        '''
-        o, s = Perceptron._max_outcome(self._history, event, self._kernel)
-        return o, s / self._iterations
+        return Perceptron._max_outcome(self._history, event, self._kernel)
 
     def learn(self, event, outcome):
-        '''Adjust the hyperplane based on a classification attempt.
+        self._iterations[outcome] += 1
+        pred, score = Perceptron._max_outcome(self._weights, event, self._kernel)
+        if pred == outcome:
+            self._survived[outcome] += 1
+            return
 
-        event: A numpy vector of the dimensionality of our input space.
-        outcome: An integer indicating the correct outcome for this event.
-        '''
-        pred, _ = Perceptron._max_outcome(self._weights, event, self._kernel)
-        if pred != outcome:
-            if self._survived > 0:
-                self._update_history(pred)
-                self._update_history(outcome)
-                self._survived = 0
-            self._update_weights(pred, event, -1)
-            self._update_weights(outcome, event, 1)
-        else:
-            self._survived += 1
-        self._iterations += 1
+        self._update_history(pred)
+        self._update_history(outcome)
+        self._update_weights(pred, event, -1)
+        self._update_weights(outcome, event, 1)
 
     def _update_history(self, class_index):
         '''Update the history for a particular class.'''
-        self._history[class_index] += \
-            self._survived * self._weights[class_index]
+        s = self._survived[class_index]
+        if s > 0:
+            acc = self._acc[class_index]
+            acc += s * self._weights[class_index]
+            self._history[class_index] = acc / self._iterations[class_index]
+            self._survived[class_index] = 0
 
 
 class SparseAveragedPerceptron(AveragedPerceptron):
@@ -204,7 +195,8 @@ class SparseAveragedPerceptron(AveragedPerceptron):
 
     In addition, the classifier only retains the top-weighted features for
     each class, making this a sort of beam search version of the general
-    Perceptron. This reduces the space requirements for the classifier.
+    Perceptron. This reduces the space requirements for the classifier, at the
+    cost of lower accuracy.
     '''
 
     def __init__(self, event_size, outcome_size, beam_width=1000):
@@ -212,6 +204,7 @@ class SparseAveragedPerceptron(AveragedPerceptron):
         super(SparseAveragedPerceptron, self).__init__(event_size, outcome_size)
         self._weights = [defaultdict(float) for _ in xrange(outcome_size)]
         self._history = [defaultdict(float) for _ in xrange(outcome_size)]
+        self._acc = [defaultdict(float) for _ in xrange(outcome_size)]
         self._kernel = SparseAveragedPerceptron._dot
         self._beam_width = beam_width
 
@@ -221,14 +214,18 @@ class SparseAveragedPerceptron(AveragedPerceptron):
         return sum(weights.get(f, 0) for f in event)
 
     def _update_history(self, class_index):
-        '''Update the history for a particular class.'''
-        h = self._history[class_index]
-        for f, w in self._weights[class_index].iteritems():
-            h[f] += self._survived * w
-        self._prune(h)
+        s = self._survived[class_index]
+        if s > 0:
+            i = self._iterations[class_index]
+            a = self._acc[class_index]
+            h = self._history[class_index]
+            for f, w in self._weights[class_index].iteritems():
+                a[f] += s * w
+                h[f] = a[f] / i
+            self._prune(h)
+            self._survived[class_index] = 0
 
     def _update_weights(self, class_index, event, delta):
-        '''Update the weights for an index based on an event.'''
         w = self._weights[class_index]
         for f in event:
             w[f] += delta
@@ -236,7 +233,7 @@ class SparseAveragedPerceptron(AveragedPerceptron):
 
     def _prune(self, weights):
         '''Prune the weights in a sparse vector to our beam width.'''
-        if len(weights) < 1.5 * self._beam_width:
+        if len(weights) < 1.3 * self._beam_width:
             return
         fws = sorted(weights.iteritems(), key=lambda x: -abs(x[1]))
         for f, _ in fws[self._beam_width:]:

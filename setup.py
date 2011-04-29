@@ -3,7 +3,7 @@ import setuptools
 setuptools.setup(
     name='perceptron',
     version='1.0',
-    modules=['perceptron'],
+    py_modules=['perceptron'],
     install_requires=['numpy'],
 
     author='Leif Johnson',
